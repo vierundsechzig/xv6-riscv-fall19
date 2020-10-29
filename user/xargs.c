@@ -19,6 +19,8 @@ int main(int argc, char* argv[])
     {
         if (ch == '\n')
         {
+            if (p == buf)
+                continue;
             *p = '\0';
             p = buf;
             if (i < MAXARG - 1)
@@ -41,6 +43,8 @@ int main(int argc, char* argv[])
         }
         else if (ch == ' ')
         {
+            if (p == buf)
+                continue;
             *p = '\0';
             p = buf;
             if (i < MAXARG - 1)
