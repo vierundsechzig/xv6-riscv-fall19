@@ -10,5 +10,13 @@ int main(int argc, char *argv[])
         ticks = atoi(argv[1]);
 	    sleep(ticks);
     }
+    else if (argc < 2)
+    {
+        printf("sleep: too few arguments");
+    }
+    else
+    {
+        printf("sleep: too many arguments");
+    }
     exit();
 }
