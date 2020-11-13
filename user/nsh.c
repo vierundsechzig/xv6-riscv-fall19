@@ -12,12 +12,19 @@ void execcmd(char* cmd)
     static char* args[MAX_ARGS + 1];
     static char in_red_buf[MAX_SIZE]; // Input redirection
     int in_red_exists;
-    int in_red_flag; // Makrs whether next argument belongs to input redirection
-    int in_red_error;
+    int in_red_flag; // Marks whether next argument belongs to input redirection
+    int in_red_error; // Set on syntax error
     static char out_red_buf[MAX_SIZE]; // Output redirection
     int out_red_exists;
-    int out_red_flag; // Makrs whether next argument belongs to output redirection
-    int out_red_error;
+    int out_red_flag; // Marks whether next argument belongs to output redirection
+    int out_red_error; // Set on syntax error
+    int pipe_flag;
+    int in_red_before_pipe;
+    int out_red_before_pipe;
+    int in_red_after_pipe;
+    int out_red_after_pipe;
+    int pipe_error; // Set on trying to set a pipe of more than two elements
+    int cmd_left_argc; // Argument count of the command before pipe
     char* ptr_cmd;
     char* p;
     char* ptr_in_red;
@@ -38,6 +45,13 @@ void execcmd(char* cmd)
     out_red_exists = 0;
     out_red_flag = 0;
     out_red_error = 0;
+    pipe_error = 0;
+    pipe_flag = 0;
+    in_red_before_pipe = 0;
+    out_red_before_pipe = 0;
+    in_red_after_pipe = 0;
+    out_red_after_pipe = 0;
+    cmd_left_argc = 0;
     for (ptr_cmd = cmd; *ptr_cmd != '\0'; ++ptr_cmd)
     {
         switch (*ptr_cmd)
@@ -96,6 +110,10 @@ void execcmd(char* cmd)
                 }
                 in_red_exists = 1;
                 in_red_flag = 1;
+                if (pipe_flag)
+                    in_red_after_pipe = 1;
+                else
+                    in_red_before_pipe = 1;
                 break;
             case '>':
                 if (p != buf) // Handle previous argument
@@ -119,6 +137,45 @@ void execcmd(char* cmd)
                 }
                 out_red_exists = 1;
                 out_red_flag = 1;
+                if (pipe_flag)
+                    out_red_after_pipe = 1;
+                else
+                    out_red_before_pipe = 1;
+                break;
+            case '|':
+                if (pipe_flag) // Already exists a '|'
+                    pipe_error = 1;
+                else
+                {
+                    pipe_flag = 1;
+                    if (!in_red_flag && !out_red_flag && p == buf)
+                        continue;
+                    if (in_red_flag && ptr_in_red == in_red_buf)
+                        in_red_error = 1;
+                    else if (out_red_flag && ptr_out_red == out_red_buf)
+                        out_red_error = 1;
+                    else if (in_red_flag)
+                    {
+                        *ptr_in_red = '\0';
+                        ptr_in_red = in_red_buf;
+                        in_red_flag = 0;
+                    }
+                    else if (out_red_flag)
+                    {
+                        *ptr_out_red = '\0';
+                        ptr_out_red = out_red_buf;
+                        out_red_flag = 0;
+                    }
+                    else
+                    {
+                        *p = '\0';
+                        p = buf;
+                        if (i < MAX_ARGS)
+                        {
+                            strcpy(args[i++], buf);
+                        }
+                    }
+                }
                 break;
             default:
                 if (in_red_flag)
@@ -142,6 +199,24 @@ void execcmd(char* cmd)
         fprintf(2, "nsh: no file to redirect standard output to\n");
         return;
     }
+    if (pipe_error)
+    {
+        fprintf(2, "nsh: sorry, we do not support pipe of more than two elements\n");
+        return;
+    }
+    if (pipe_flag)
+    {
+        if (out_red_before_pipe)
+        {
+            fprintf(2, "nsh: output redirection should not come before pipe\n");
+            return;
+        }
+        if (in_red_after_pipe)
+        {
+            fprintf(2, "nsh: input redirection should not come after pipe\n");
+            return;
+        }
+    }
     if (in_red_flag)
     {
         *ptr_in_red = '\0';
@@ -163,44 +238,101 @@ void execcmd(char* cmd)
             strcpy(args[i++], buf);
         }
     }
-    temp = args[i];
-    args[i] = 0;
-    if (fork() == 0)
+    if (pipe_flag)
     {
-        if (in_red_exists)
+        int pipe_before, pipe_after, transfer[2];
+        if (pipe(&transfer) < 0)
         {
-            close(0);
-            if ((fd = open(in_red_buf, O_RDONLY)) < 0)
-            {
-                fprintf(2, "nsh: open %s failed\n", in_red_buf);
-                exit(-1);
-            }
+            fprintf(2, "nsh: intializing pipe failed\n");
+            exit(-1);
         }
-        if (out_red_exists)
+        pipe_before = fork();
+        if (pipe_before == 0)
         {
+            temp = args[i];
+            args[i] = 0;
+            if (in_red_exists)
+            {
+                close(0);
+                if ((fd = open(in_red_buf, O_RDONLY)) < 0)
+                {
+                    fprintf(2, "nsh: open %s failed\n", in_red_buf);
+                    exit(-1);
+                }
+            }
             close(1);
-            if ((fd = open(out_red_buf, O_WRONLY|O_CREATE)) < 0)
-            {
-                fprintf(2, "nsh: create %s failed\n", out_red_buf);
-                exit(-1);
-            }
+            dup(p[1]);
+            close(p[0]);
+            close(p[1]);
+            if (exec(args[0], args) < 0)
+                fprintf(2, "nsh: exec %s failed\n", args[0]);
+            exit(0);
         }
-        if (exec(args[0], args) < 0)
-            fprintf(2, "nsh: exec %s failed\n", args[0]);
-        exit(0);
+        else
+        {
+            pipe_after = fork();
+            if (pipe_after == 0)
+            {
+                temp = args[i];
+                args[i] = 0;
+                if (out_red_exists)
+                {
+                    close(1);
+                    if ((fd = open(out_red_buf, O_WRONLY|O_CREATE)) < 0)
+                    {
+                        fprintf(2, "nsh: open %s failed\n", out_red_buf);
+                    exit(-1);
+                    }
+                }
+                close(0);
+                dup(p[0]);
+                close(p[0]);
+                close(p[1]);
+                if (exec(args[0], args) < 0)
+                    fprintf(2, "nsh: exec %s failed\n", args[0]);
+                exit(0);
+            }
+            else
+                wait(&status);
+            wait(&status);
+        }
+        close(transfer[0]);
+        close(transfer[1]);
     }
     else
     {
-        // Parent process: ready for next line
-        args[i] = temp;
-        i = 0;
-        in_red_exists = 0;
-        in_red_flag = 0;
-        in_red_error = 0;
-        out_red_exists = 0;
-        out_red_flag = 0;
-        out_red_error = 0;
-        wait(&status);
+        temp = args[i];
+        args[i] = 0;
+        if (fork() == 0)
+        {
+            if (in_red_exists)
+            {
+                close(0);
+                if ((fd = open(in_red_buf, O_RDONLY)) < 0)
+                {
+                    fprintf(2, "nsh: open %s failed\n", in_red_buf);
+                    exit(-1);
+                }
+            }
+            if (out_red_exists)
+            {
+                close(1);
+                if ((fd = open(out_red_buf, O_WRONLY|O_CREATE)) < 0)
+                {
+                    fprintf(2, "nsh: open %s failed\n", out_red_buf);
+                    exit(-1);
+                }
+            }
+            if (exec(args[0], args) < 0)
+                fprintf(2, "nsh: exec %s failed\n", args[0]);
+            exit(0);
+        }
+        else
+        {
+            // Parent process: ready for next line
+            args[i] = temp;
+            wait(&status);
+        }
     }
 }
 
@@ -217,3 +349,37 @@ int main(int argc, char* argv[])
     } while (1);
     exit(0);
 }
+
+  in_red_exists = 0;
+        in_red_flag = 0;
+        in_red_error = 0;
+        out_red_exists = 0;
+        out_red_flag = 0;
+        out_red_error = 0;
+        pipe_flag = 0;
+        in_red_before_pipe = 0;
+        out_red_before_pipe = 0;
+        in_red_after_pipe = 0;
+        out_red_after_pipe = 0;
+        pipe_error = 0;
+        cmd_left_argc = 0;
+        wait(&status);
+    }
+    }
+    
+}
+
+int main(int argc, char* argv[])
+{
+    char cmd[MAX_SIZE];
+    do
+    {
+        printf("@ ");
+        if (*gets(cmd, MAX_SIZE) != '\0')
+            execcmd(cmd);
+        else
+            break;
+    } while (1);
+    exit(0);
+}
+
