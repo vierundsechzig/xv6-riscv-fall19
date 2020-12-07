@@ -58,8 +58,6 @@ filedup(struct file *f)
 void
 fileclose(struct file *f)
 {
-  // struct file ff;
-
   acquire(&ftable.lock);
   if(f->ref < 1)
     panic("fileclose");
@@ -67,22 +65,15 @@ fileclose(struct file *f)
     release(&ftable.lock);
     return;
   }
-  /*
-  ff = *f;
-  f->ref = 0;
-  f->type = FD_NONE;
-  */
   release(&ftable.lock);
-  bd_free(f);
-  /*
-  if(ff.type == FD_PIPE){
-    pipeclose(ff.pipe, ff.writable);
-  } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
-    begin_op(ff.ip->dev);
-    iput(ff.ip);
-    end_op(ff.ip->dev);
+  if(f->type == FD_PIPE){
+    pipeclose(f->pipe, f->writable);
+  } else if(f->type == FD_INODE || f->type == FD_DEVICE){
+    begin_op(f->ip->dev);
+    iput(f->ip);
+    end_op(f->ip->dev);
   }
-  */
+  bd_free(f);
 }
 
 // Get metadata about file f.
